@@ -24,15 +24,9 @@ async def upload_design(
     is_public: bool = Form(False),
     tags: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
-    # TODO: uncomment when using JWT
-    # current_user_email: str = Depends(auth.oauth2_scheme) 
+    current_user: models.User = Depends(auth.get_current_user)
 ):
-    # Dummy user for now since frontend might not perfectly pass JWT immediately
-    # We will grab the first user
-    result = await db.execute(select(models.User))
-    user = result.scalars().first()
-    if not user:
-         raise HTTPException(status_code=400, detail="No users exist to bind upload to")
+    user = current_user
 
     # File validation
     if not file.content_type.startswith("image/"):
