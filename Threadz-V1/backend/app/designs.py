@@ -4,21 +4,38 @@ import uuid
 import asyncio
 from typing import Optional, List, Dict
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query, BackgroundTasks, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import desc
 
 from . import models, schemas_design, auth
 from .database import get_db
+from .security import sanitize_input, validate_design_name, generate_secure_filename
+from .rate_limiter import check_rate_limit
 
 router = APIRouter(prefix="/api/v1/designs", tags=["designs"])
 
 UPLOAD_DIR = "uploads/designs"
+MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", "10485760"))  # 10MB default
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+def validate_file(file: UploadFile) -> bool:
+    """Validate uploaded file for security"""
+    if not file.content_type or not file.content_type.startswith("image/"):
+        return False
+    
+    if file.filename:
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        if file_ext not in ALLOWED_EXTENSIONS:
+            return False
+    
+    return True
 
 @router.post("/upload", response_model=schemas_design.DesignResponse, status_code=status.HTTP_201_CREATED)
 async def upload_design(
+    request: Request,
     file: UploadFile = File(...),
     design_name: str = Form(...),
     is_public: bool = Form(False),
@@ -26,21 +43,40 @@ async def upload_design(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
+    # Rate limiting check
+    check_rate_limit(request, limit=10, window=60)  # 10 uploads per minute
+    
     user = current_user
 
-    # File validation
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="File must be an image")
+    # Validate and sanitize design name
+    if not validate_design_name(design_name):
+        raise HTTPException(status_code=400, detail="Invalid design name. Only alphanumeric characters, spaces, and basic punctuation are allowed.")
     
-    file_ext = file.filename.split(".")[-1]
-    unique_filename = f"{uuid.uuid4()}.{file_ext}"
-    file_path = os.path.join(UPLOAD_DIR, unique_filename)
+    design_name = sanitize_input(design_name)
 
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    # File validation
+    if not validate_file(file):
+        raise HTTPException(status_code=400, detail="Invalid file type. Only images are allowed.")
+    
+    # Check file size
+    file.file.seek(0, 2)  # Seek to end
+    file_size = file.file.tell()
+    file.file.seek(0)  # Reset position
+    
+    if file_size > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail=f"File size exceeds limit of {MAX_FILE_SIZE // (1024*1024)}MB")
+    
+    try:
+        unique_filename = generate_secure_filename(file.filename)
+        file_path = os.path.join(UPLOAD_DIR, unique_filename)
+
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to save file")
 
     # Simplified mock for image size/dpi
-    file_size_kb = os.path.getsize(file_path) // 1024
+    file_size_kb = file_size // 1024
 
     new_design = models.Design(
         user_id=user.user_id,
@@ -48,7 +84,7 @@ async def upload_design(
         design_source="upload",
         image_url=f"/api/v1/uploads/designs/{unique_filename}",
         is_public=is_public,
-        tags=tags,
+        tags=sanitize_input(tags) if tags else None,
         file_size_kb=file_size_kb,
         width_px=800, # Mocked
         height_px=800, # Mocked

@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta
 import jwt
 from passlib.context import CryptContext
@@ -9,9 +10,9 @@ from sqlalchemy.future import select
 from . import models, schemas
 from .database import get_db
 
-SECRET_KEY = "super-secret-key-for-threadz"
+SECRET_KEY = os.getenv("SECRET_KEY", "your-super-secret-key-change-in-production")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
