@@ -1,0 +1,124 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: threadz-backend
+  labels:
+    app: threadz-backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: threadz-backend
+  template:
+    metadata:
+      labels:
+        app: threadz-backend
+    spec:
+      containers:
+      - name: threadz-backend
+        image: threadz/backend:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: threadz-secrets
+              key: database-url
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: threadz-secrets
+              key: secret-key
+        - name: RAZORPAY_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: threadz-secrets
+              key: razorpay-key-id
+        - name: RAZORPAY_KEY_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: threadz-secrets
+              key: razorpay-key-secret
+        - name: REDIS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: threadz-config
+              key: redis-url
+        - name: SENTRY_DSN
+          valueFrom:
+            secretKeyRef:
+              name: threadz-secrets
+              key: sentry-dsn
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - name: uploads-volume
+          mountPath: /app/uploads/designs
+      volumes:
+      - name: uploads-volume
+        persistentVolumeClaim:
+          claimName: threadz-uploads-pvc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: threadz-frontend
+  labels:
+    app: threadz-frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: threadz-frontend
+  template:
+    metadata:
+      labels:
+        app: threadz-frontend
+    spec:
+      containers:
+      - name: threadz-frontend
+        image: threadz/frontend:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NEXT_PUBLIC_API_URL
+          value: "https://api.yourdomain.com"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5

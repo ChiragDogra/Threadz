@@ -7,12 +7,15 @@ from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query, BackgroundTasks, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import desc
+from sqlalchemy.orm import selectinload
 
 from . import models, schemas_design, auth
 from .database import get_db
 from .security import sanitize_input, validate_design_name, generate_secure_filename
 from .rate_limiter import check_rate_limit
+from .storage import s3_storage
+from .ai_service import ai_service
+from .queue import job_queue
 
 router = APIRouter(prefix="/api/v1/designs", tags=["designs"])
 
@@ -67,35 +70,251 @@ async def upload_design(
         raise HTTPException(status_code=400, detail=f"File size exceeds limit of {MAX_FILE_SIZE // (1024*1024)}MB")
     
     try:
-        unique_filename = generate_secure_filename(file.filename)
-        file_path = os.path.join(UPLOAD_DIR, unique_filename)
+        # Upload to S3 with optimization
+        s3_url, thumbnail_url = await s3_storage.upload_design_image(file, optimize=True)
+        
+        # Get file size from S3 upload
+        file_size_kb = file_size // 1024
 
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        new_design = models.Design(
+            user_id=user.user_id,
+            design_name=design_name,
+            design_source="upload",
+            image_url=s3_url,
+            thumbnail_url=thumbnail_url,
+            is_public=is_public,
+            tags=sanitize_input(tags) if tags else None,
+            file_size_kb=file_size_kb,
+            width_px=800, # Mocked - could be extracted from image
+            height_px=800, # Mocked - could be extracted from image
+            dpi=300 # Mocked
+        )
+
+        db.add(new_design)
+        await db.commit()
+        await db.refresh(new_design)
+
+        return new_design
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Failed to save file")
+        raise HTTPException(status_code=500, detail=f"Failed to save design: {str(e)}")
 
-    # Simplified mock for image size/dpi
-    file_size_kb = file_size // 1024
+@router.post("/generate", response_model=schemas_design.DesignResponse, status_code=status.HTTP_201_CREATED)
+async def generate_design(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    prompt: str = Form(...),
+    style: str = Form("realistic"),
+    is_public: bool = Form(False),
+    tags: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    # Rate limiting check
+    check_rate_limit(request, limit=5, window=300)  # 5 generations per 5 minutes
+    
+    user = current_user
 
-    new_design = models.Design(
-        user_id=user.user_id,
-        design_name=design_name,
-        design_source="upload",
-        image_url=f"/api/v1/uploads/designs/{unique_filename}",
-        is_public=is_public,
-        tags=sanitize_input(tags) if tags else None,
-        file_size_kb=file_size_kb,
-        width_px=800, # Mocked
-        height_px=800, # Mocked
-        dpi=300 # Mocked
-    )
+    # Validate and sanitize prompt
+    if not prompt or len(prompt.strip()) < 3:
+        raise HTTPException(status_code=400, detail="Prompt must be at least 3 characters long")
+    
+    prompt = sanitize_input(prompt.strip())
+    style = sanitize_input(style.strip())
 
-    db.add(new_design)
-    await db.commit()
-    await db.refresh(new_design)
+    try:
+        # Create initial design record
+        new_design = models.Design(
+            user_id=user.user_id,
+            design_name=f"AI Generated: {prompt[:50]}...",
+            design_source="ai",
+            image_url="",  # Will be updated when generation completes
+            thumbnail_url="",  # Will be updated when generation completes
+            is_public=is_public,
+            tags=sanitize_input(tags) if tags else None,
+            file_size_kb=0,
+            width_px=1024,
+            height_px=1024,
+            dpi=300
+        )
 
-    return new_design
+        db.add(new_design)
+        await db.commit()
+        await db.refresh(new_design)
+
+        # Queue AI generation job
+        job_id = await job_queue.enqueue_ai_generation(
+            design_id=new_design.design_id,
+            prompt=prompt,
+            style=style,
+            user_id=user.user_id
+        )
+
+        return new_design
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start AI generation: {str(e)}")
+
+@router.get("/generate/status/{job_id}")
+async def get_generation_status(
+    job_id: str,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get AI generation job status"""
+    try:
+        status_info = await job_queue.get_job_status(job_id)
+        
+        if not status_info:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        # Check if user owns this job
+        if status_info.get("user_id") != current_user.user_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        return status_info
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get job status: {str(e)}")
+
+@router.get("/", response_model=List[schemas_design.DesignResponse])
+async def explore_designs(
+    request: Request,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db)
+):
+    # Rate limiting check
+    check_rate_limit(request, limit=100, window=60)  # 100 requests per minute
+    
+    try:
+        query = select(models.Design).where(models.Design.is_public == True)
+        
+        if search:
+            search_term = f"%{sanitize_input(search)}%"
+            query = query.where(models.Design.design_name.ilike(search_term))
+        
+        query = query.order_by(models.Design.created_at.desc()).offset(skip).limit(limit)
+        
+        result = await db.execute(query)
+        designs = result.scalars().all()
+        
+        return designs
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch designs: {str(e)}")
+
+@router.get("/my-designs", response_model=List[schemas_design.DesignResponse])
+async def get_my_designs(
+    request: Request,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    # Rate limiting check
+    check_rate_limit(request, limit=100, window=60)
+    
+    try:
+        query = select(models.Design).where(models.Design.user_id == current_user.user_id)
+        query = query.order_by(models.Design.created_at.desc()).offset(skip).limit(limit)
+        
+        result = await db.execute(query)
+        designs = result.scalars().all()
+        
+        return designs
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch designs: {str(e)}")
+
+@router.get("/{design_id}", response_model=schemas_design.DesignResponse)
+async def get_design(
+    design_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        query = select(models.Design).where(models.Design.design_id == design_id)
+        result = await db.execute(query)
+        design = result.scalars().first()
+        
+        if not design:
+            raise HTTPException(status_code=404, detail="Design not found")
+        
+        return design
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch design: {str(e)}")
+
+@router.delete("/{design_id}")
+async def delete_design(
+    design_id: str,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        # Get design
+        query = select(models.Design).where(models.Design.design_id == design_id)
+        result = await db.execute(query)
+        design = result.scalars().first()
+        
+        if not design:
+            raise HTTPException(status_code=404, detail="Design not found")
+        
+        # Check ownership
+        if design.user_id != current_user.user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to delete this design")
+        
+        # Delete from S3
+        if design.image_url:
+            await s3_storage.delete_file(design.image_url)
+        
+        if design.thumbnail_url and design.thumbnail_url != design.image_url:
+            await s3_storage.delete_file(design.thumbnail_url)
+        
+        # Delete from database
+        await db.delete(design)
+        await db.commit()
+        
+        return {"message": "Design deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete design: {str(e)}")
+
+@router.get("/{design_id}/download")
+async def download_design(
+    design_id: str,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate presigned URL for design download"""
+    try:
+        # Get design
+        query = select(models.Design).where(models.Design.design_id == design_id)
+        result = await db.execute(query)
+        design = result.scalars().first()
+        
+        if not design:
+            raise HTTPException(status_code=404, detail="Design not found")
+        
+        # Check ownership or public access
+        if design.user_id != current_user.user_id and not design.is_public:
+            raise HTTPException(status_code=403, detail="Not authorized to download this design")
+        
+        # Generate presigned URL
+        download_url = await s3_storage.generate_presigned_url(design.image_url, expiration=3600)
+        
+        return {"download_url": download_url, "expires_in": 3600}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate download URL: {str(e)}")
 
 @router.get("/explore", response_model=schemas_design.DesignPaginatedResponse)
 async def get_explore_designs(

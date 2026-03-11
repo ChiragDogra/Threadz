@@ -1,0 +1,64 @@
+# Production Dockerfile for Threadz Backend
+FROM python:3.11-slim as production
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install system dependencies
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+        curl \
+        clamav \
+        clamav-daemon \
+        clamav-freshclam \
+        && rm -rf /var/lib/apt/lists/*
+
+# Create and activate virtual environment
+RUN python -m venv /opt/venv
+
+# Upgrade pip and install Python dependencies
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
+
+# Create app user with proper permissions
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+# Install ClamAV virus database
+RUN freshclam
+
+# Set working directory
+WORKDIR /app
+
+# Copy application code
+COPY backend/ .
+
+# Create necessary directories and set permissions
+RUN mkdir -p uploads/designs ssl logs \
+    && chown -R appuser:appuser /app \
+    && chmod 755 /app/uploads \
+    && chmod 700 /app/ssl \
+    && chmod 755 /app/logs
+
+# Switch to non-root user
+USER appuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Expose port
+EXPOSE 8000
+
+# Run the application with production settings
+CMD ["uvicorn", "app.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "4", \
+     "--worker-class", "uvicorn.workers.UvicornWorker", \
+     "--access-log", \
+     "--log-level", "info"]
