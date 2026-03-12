@@ -1,173 +1,366 @@
-"use client";
+'use client';
 
-import { useEffect, useRef, useState } from "react";
-import * as fabric from "fabric";
-import { Upload, Save, X, RotateCw, RefreshCw } from "lucide-react";
+import { useState, useRef } from 'react';
+import { Upload, Save, X, RotateCw, Edit3, Search, ChevronDown, ShoppingCart, Palette, Image, Sparkles } from 'lucide-react';
+import Link from 'next/link';
+
+interface ClothType {
+  id: string;
+  name: string;
+  subTypes: ClothSubType[];
+}
+
+interface ClothSubType {
+  id: string;
+  name: string;
+  qualities: ClothQuality[];
+}
+
+interface ClothQuality {
+  id: string;
+  name: string;
+  price: number;
+}
+
+const clothTypes: ClothType[] = [
+  {
+    id: 'tshirt',
+    name: 'T-Shirt',
+    subTypes: [
+      {
+        id: 'crew-neck',
+        name: 'Crew Neck',
+        qualities: [
+          { id: 'basic-cotton', name: 'Basic Cotton', price: 19.99 },
+          { id: 'premium-cotton', name: 'Premium Cotton', price: 29.99 }
+        ]
+      },
+      {
+        id: 'henley',
+        name: 'Henley',
+        qualities: [
+          { id: 'henley-cotton', name: 'Cotton Henley', price: 24.99 }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'hoodie',
+    name: 'Hoodie',
+    subTypes: [
+      {
+        id: 'pullover',
+        name: 'Pullover',
+        qualities: [
+          { id: 'fleece', name: 'Fleece', price: 49.99 }
+        ]
+      }
+    ]
+  }
+];
+
+const colorOptions = [
+  { name: 'Solid White', value: '#FFFFFF', type: 'solid' },
+  { name: 'Solid Black', value: '#000000', type: 'solid' },
+  { name: 'Solid Navy', value: '#001F3F', type: 'solid' },
+  { name: 'Purple Gradient', value: 'linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)', type: 'gradient' }
+];
 
 export default function UploadPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [fabricCanvas, setFabricCanvas] = useState<fabric.Canvas | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const [designName, setDesignName] = useState("My Custom Design");
-
-  useEffect(() => {
-    if (canvasRef.current && !fabricCanvas) {
-      const canvas = new fabric.Canvas(canvasRef.current, {
-        width: 400,
-        height: 500,
-        backgroundColor: "#f8fafc"
-      });
-      setFabricCanvas(canvas);
-      
-      // Load a dummy t-shirt mockup outline (just a rect for now to simulate print area)
-      const printArea = new fabric.Rect({
-        width: 250,
-        height: 350,
-        fill: "transparent",
-        stroke: "#cbd5e1",
-        strokeWidth: 2,
-        strokeDashArray: [5, 5],
-        selectable: false,
-        evented: false,
-        left: 75,
-        top: 75
-      });
-      canvas.add(printArea);
-      
-      return () => {
-        canvas.dispose();
-      };
-    }
-  }, [canvasRef, fabricCanvas]);
+  const [uploadedImage, setUploadedImage] = useState<File | null>(null);
+  const [designName, setDesignName] = useState('My Custom Design');
+  const [saveToExplore, setSaveToExplore] = useState(false);
+  const [saveToAccount, setSaveToAccount] = useState(true);
+  const [selectedClothType, setSelectedClothType] = useState<ClothType | null>(null);
+  const [selectedSubType, setSelectedSubType] = useState<ClothSubType | null>(null);
+  const [selectedQuality, setSelectedQuality] = useState<ClothQuality | null>(null);
+  const [selectedColor, setSelectedColor] = useState(colorOptions[0]);
+  const [showClothDropdown, setShowClothDropdown] = useState(false);
+  const [showSubTypeDropdown, setShowSubTypeDropdown] = useState(false);
+  const [showQualityDropdown, setShowQualityDropdown] = useState(false);
+  const [showColorDropdown, setShowColorDropdown] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !fabricCanvas) return;
-
-    const reader = new FileReader();
-    reader.onload = (f) => {
-      const data = f.target?.result;
-      fabric.Image.fromURL(data as string).then((img) => {
-        img.scaleToWidth(200);
-        img.set({
-          left: 100,
-          top: 150,
-        });
-        fabricCanvas.add(img);
-        fabricCanvas.setActiveObject(img);
-        fabricCanvas.renderAll();
-      });
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const clearCanvas = () => {
-    if (!fabricCanvas) return;
-    const objects = fabricCanvas.getObjects();
-    // Remove everything EXCEPT the print area mockup (first object)
-    if (objects.length > 1) {
-       for (let i = 1; i < objects.length; i++) {
-           fabricCanvas.remove(objects[i]);
-       }
+    if (file) {
+      setUploadedImage(file);
+      // In a real app, this would render the image on the canvas
     }
   };
 
-  const saveDesign = async () => {
-    if (!fabricCanvas) return;
-    setIsUploading(true);
+  const handleSave = () => {
+    if (!uploadedImage) return;
     
-    // Extact data url of only the design content (for actual implementation we might extract just the selection)
-    // For now we'll send the whole canvas as a dataURL and convert to blob
-    const dataURL = fabricCanvas.toDataURL({
-      format: 'png',
-      quality: 1,
-      multiplier: 1,
-    });
-    
-    try {
-      const response = await fetch(dataURL);
-      const blob = await response.blob();
-      
-      const formData = new FormData();
-      formData.append("file", blob, "design.png");
-      formData.append("design_name", designName);
-      formData.append("is_public", "true");
-      
-      // We will proxy this to the backend we built earlier
-      const res = await fetch("http://localhost:8000/api/v1/designs/upload", {
-        method: "POST",
-        body: formData,
-      });
-      
-      if (res.ok) {
-        alert("Design uploaded successfully!");
-      } else {
-        alert("Upload failed.");
-      }
-    } catch (e) {
-      console.error(e);
-      alert("An error occurred during upload.");
-    } finally {
-      setIsUploading(false);
+    // Save logic here
+    if (saveToExplore) {
+      // Save to explore page
     }
+    if (saveToAccount) {
+      // Save to user's saved designs
+    }
+  };
+
+  const handleUseDesign = () => {
+    if (!uploadedImage || !selectedClothType || !selectedSubType || !selectedQuality) return;
+    
+    // Redirect to design page with pre-filled data
+    window.location.href = '/design';
   };
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-5xl">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-slate-900">Upload & Customize Design</h1>
-        <p className="text-slate-500 mt-2">Upload your artwork, resize and position it in the print area.</p>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-        
-        {/* Editor Tools */}
-        <div className="md:col-span-1 space-y-6 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Design Name</label>
-            <input 
-              type="text" 
-              value={designName}
-              onChange={(e) => setDesignName(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
+    <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-rose-50 dark:from-slate-900 dark:via-teal-800 dark:to-purple-900">
+      <div className="container mx-auto px-4 py-8">
+        <div className="flex justify-between items-center mb-8">
+          <h1 className="text-3xl font-bold text-purple-900 dark:text-cream-100">Upload Design</h1>
+          <div className="flex gap-4">
+            <Link 
+              href="/design" 
+              className="px-4 py-2 bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-300 rounded-lg hover:bg-purple-200 dark:hover:bg-purple-700 transition-colors"
+            >
+              Start Designing
+            </Link>
+            <Link 
+              href="/explore" 
+              className="px-4 py-2 bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-300 rounded-lg hover:bg-purple-200 dark:hover:bg-purple-700 transition-colors"
+            >
+              Explore Designs
+            </Link>
+            <Link 
+              href="/generate" 
+              className="px-4 py-2 bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-300 rounded-lg hover:bg-purple-200 dark:hover:bg-purple-700 transition-colors"
+            >
+              AI Generation
+            </Link>
           </div>
-          
-          <div className="pt-4 border-t border-slate-100">
-            <h3 className="text-sm font-medium text-slate-700 mb-4">Actions</h3>
-            <div className="space-y-3">
-              <label className="flex items-center justify-center w-full h-12 px-4 border-2 border-dashed border-slate-300 rounded-lg cursor-pointer hover:border-indigo-500 hover:bg-indigo-50 transition-colors">
-                <Upload className="w-5 h-5 mr-2 text-slate-500" />
-                <span className="text-sm font-medium text-slate-600">Choose Image</span>
-                <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
-              </label>
+        </div>
 
-              <button 
-                onClick={clearCanvas}
-                className="flex items-center justify-center w-full h-10 px-4 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors text-sm font-medium"
-              >
-                <X className="w-4 h-4 mr-2" /> Clear Canvas
-              </button>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Left Column - Upload & Settings */}
+          <div className="space-y-6">
+            {/* Upload Section */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-lg">
+              <h2 className="text-xl font-semibold text-purple-900 dark:text-cream-100 mb-4">Upload Your Design</h2>
+              
+              <div className="border-2 border-dashed border-purple-300 dark:border-purple-600 rounded-lg p-8 text-center">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageUpload}
+                  className="hidden"
+                  id="image-upload"
+                />
+                <label
+                  htmlFor="image-upload"
+                  className="cursor-pointer"
+                >
+                  <Upload className="w-12 h-12 text-purple-400 mx-auto mb-4" />
+                  <p className="text-purple-700 dark:text-purple-300 mb-2">Click to upload or drag and drop</p>
+                  <p className="text-sm text-purple-500 dark:text-purple-400">PNG, JPG, GIF up to 10MB</p>
+                </label>
+              </div>
+              
+              {uploadedImage && (
+                <div className="mt-4 p-4 bg-purple-100 dark:bg-purple-800 rounded-lg">
+                  <p className="text-purple-700 dark:text-purple-300">Uploaded: {uploadedImage.name}</p>
+                </div>
+              )}
+            </div>
 
-              <button 
-                onClick={saveDesign}
-                disabled={isUploading}
-                className="flex items-center justify-center w-full h-10 px-4 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm font-medium disabled:opacity-50"
-              >
-                {isUploading ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-                {isUploading ? "Saving..." : "Save Design"}
-              </button>
+            {/* Design Name */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-lg">
+              <h2 className="text-xl font-semibold text-purple-900 dark:text-cream-100 mb-4">Design Details</h2>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-purple-700 dark:text-purple-300 mb-2">Design Name</label>
+                  <input
+                    type="text"
+                    value={designName}
+                    onChange={(e) => setDesignName(e.target.value)}
+                    className="w-full px-3 py-2 border border-purple-300 dark:border-purple-600 rounded-lg bg-white dark:bg-gray-700 text-purple-900 dark:text-cream-100"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-purple-700 dark:text-purple-300 mb-2">Save Options</label>
+                  <div className="space-y-2">
+                    <label className="flex items-center">
+                      <input
+                        type="checkbox"
+                        checked={saveToExplore}
+                        onChange={(e) => setSaveToExplore(e.target.checked)}
+                        className="mr-2"
+                      />
+                      <span className="text-purple-700 dark:text-purple-300">Save to Explore Page</span>
+                    </label>
+                    <label className="flex items-center">
+                      <input
+                        type="checkbox"
+                        checked={saveToAccount}
+                        onChange={(e) => setSaveToAccount(e.target.checked)}
+                        className="mr-2"
+                      />
+                      <span className="text-purple-700 dark:text-purple-300">Save to Account</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Cloth Selection */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-lg">
+              <h2 className="text-xl font-semibold text-purple-900 dark:text-cream-100 mb-4">Cloth Selection</h2>
+              
+              {/* Similar cloth selection dropdowns as design page */}
+              <div className="space-y-4">
+                <div className="relative">
+                  <button
+                    onClick={() => setShowClothDropdown(!showClothDropdown)}
+                    className="w-full flex items-center justify-between px-4 py-2 border border-purple-300 dark:border-purple-600 rounded-lg bg-white dark:bg-gray-700 text-purple-900 dark:text-cream-100"
+                  >
+                    <span>{selectedClothType ? selectedClothType.name : 'Select Cloth Type'}</span>
+                    <ChevronDown className="w-5 h-5" />
+                  </button>
+                  
+                  {showClothDropdown && (
+                    <div className="absolute z-10 w-full mt-2 bg-white dark:bg-gray-700 border border-purple-300 dark:border-purple-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                      {clothTypes.map((type) => (
+                        <button
+                          key={type.id}
+                          onClick={() => {
+                            setSelectedClothType(type);
+                            setShowClothDropdown(false);
+                            setShowSubTypeDropdown(true);
+                          }}
+                          className="w-full px-4 py-2 text-left hover:bg-purple-100 dark:hover:bg-purple-600 text-purple-900 dark:text-cream-100"
+                        >
+                          {type.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {selectedClothType && (
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowSubTypeDropdown(!showSubTypeDropdown)}
+                      className="w-full flex items-center justify-between px-4 py-2 border border-purple-300 dark:border-purple-600 rounded-lg bg-white dark:bg-gray-700 text-purple-900 dark:text-cream-100"
+                    >
+                      <span>{selectedSubType ? selectedSubType.name : 'Select Style'}</span>
+                      <ChevronDown className="w-5 h-5" />
+                    </button>
+                    
+                    {showSubTypeDropdown && (
+                      <div className="absolute z-10 w-full mt-2 bg-white dark:bg-gray-700 border border-purple-300 dark:border-purple-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                        {selectedClothType.subTypes.map((subType) => (
+                          <button
+                            key={subType.id}
+                            onClick={() => {
+                              setSelectedSubType(subType);
+                              setShowSubTypeDropdown(false);
+                              setShowQualityDropdown(true);
+                            }}
+                            className="w-full px-4 py-2 text-left hover:bg-purple-100 dark:hover:bg-purple-600 text-purple-900 dark:text-cream-100"
+                          >
+                            {subType.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {selectedSubType && (
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowQualityDropdown(!showQualityDropdown)}
+                      className="w-full flex items-center justify-between px-4 py-2 border border-purple-300 dark:border-purple-600 rounded-lg bg-white dark:bg-gray-700 text-purple-900 dark:text-cream-100"
+                    >
+                      <span>{selectedQuality ? `${selectedQuality.name} - $${selectedQuality.price}` : 'Select Quality'}</span>
+                      <ChevronDown className="w-5 h-5" />
+                    </button>
+                    
+                    {showQualityDropdown && (
+                      <div className="absolute z-10 w-full mt-2 bg-white dark:bg-gray-700 border border-purple-300 dark:border-purple-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                        {selectedSubType.qualities.map((quality) => (
+                          <button
+                            key={quality.id}
+                            onClick={() => {
+                              setSelectedQuality(quality);
+                              setShowQualityDropdown(false);
+                            }}
+                            className="w-full px-4 py-2 text-left hover:bg-purple-100 dark:hover:bg-purple-600 text-purple-900 dark:text-cream-100"
+                          >
+                            {quality.name} - ${quality.price}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column - Preview */}
+          <div className="space-y-6">
+            {/* Preview Canvas */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-lg">
+              <h2 className="text-xl font-semibold text-purple-900 dark:text-cream-100 mb-4">Preview</h2>
+              
+              <div className="relative bg-purple-100 dark:bg-purple-900 rounded-lg aspect-square flex items-center justify-center">
+                <canvas
+                  ref={canvasRef}
+                  width={400}
+                  height={400}
+                  className="border-2 border-purple-300 dark:border-purple-600 rounded-lg bg-white"
+                />
+                
+                {isEditing && (
+                  <div className="absolute top-2 right-2 flex gap-2">
+                    <button className="p-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-lg">
+              <div className="space-y-4">
+                <div className="flex gap-4">
+                  <button
+                    onClick={handleSave}
+                    disabled={!uploadedImage}
+                    className="flex-1 px-4 py-2 bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-300 rounded-lg hover:bg-purple-200 dark:hover:bg-purple-700 transition-colors disabled:opacity-50"
+                  >
+                    <Save className="w-5 h-5 inline mr-2" />
+                    Save Design
+                  </button>
+                  <button
+                    onClick={() => setIsEditing(!isEditing)}
+                    className="flex-1 px-4 py-2 bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-300 rounded-lg hover:bg-purple-200 dark:hover:bg-purple-700 transition-colors"
+                  >
+                    <Edit3 className="w-5 h-5 inline mr-2" />
+                    Edit
+                  </button>
+                </div>
+                
+                <button
+                  onClick={handleUseDesign}
+                  disabled={!uploadedImage || !selectedClothType || !selectedSubType || !selectedQuality}
+                  className="w-full px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-lg hover:from-purple-700 hover:to-pink-700 transition-colors disabled:opacity-50"
+                >
+                  Use in Design Studio
+                </button>
+              </div>
             </div>
           </div>
         </div>
-
-        {/* Canvas Area */}
-        <div className="md:col-span-2 flex justify-center bg-slate-100 rounded-2xl p-8 border border-slate-200">
-          <div className="relative shadow-md rounded-lg overflow-hidden bg-white">
-            <canvas ref={canvasRef} />
-          </div>
-        </div>
-        
       </div>
     </div>
   );

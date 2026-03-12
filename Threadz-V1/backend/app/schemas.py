@@ -22,6 +22,9 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+class ForgotPassword(BaseModel):
+    email: EmailStr
+
 class UserResponse(BaseModel):
     user_id: str
     email: EmailStr

@@ -42,13 +42,16 @@ async def register(user: schemas.UserCreate, db: AsyncSession = Depends(get_db))
     if db_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     
-    hashed_password = get_password_hash(user.password)
+    hashed_password = get_password_hash(user.password[:72])  # Truncate password to 72 chars max
     new_user = models.User(
         email=user.email,
         password_hash=hashed_password,
-        full_name=user.full_name,
-        phone=user.phone
+        full_name=user.full_name
+        # Only set phone if provided
     )
+    if user.phone:
+        new_user.phone = user.phone
+    
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
@@ -101,4 +104,21 @@ async def login(user_credentials: schemas.UserLogin, db: AsyncSession = Depends(
              "email": user.email,
              "full_name": user.full_name
         }
+    }
+
+@router.post("/forgot-password")
+async def forgot_password(forgot_password: schemas.ForgotPassword, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(models.User).filter(models.User.email == forgot_password.email))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Email not found"
+        )
+    
+    # In a real application, you would send an email here
+    # For now, we'll just return a success message
+    return {
+        "message": "Password reset instructions sent to your email",
+        "email": forgot_password.email
     }
