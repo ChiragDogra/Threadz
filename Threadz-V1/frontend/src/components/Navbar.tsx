@@ -55,6 +55,11 @@ export default function Navbar() {
             <div className="hidden md:flex items-center gap-3">
               {user ? (
                 <div className="flex items-center gap-3">
+                  {user.role === 'admin' && (
+                    <Link href="/admin" className="text-sm font-medium text-purple-600 dark:text-purple-400 hover:text-purple-700 dark:hover:text-purple-300 transition">
+                      Admin
+                    </Link>
+                  )}
                   <Link href="/account" className="text-sm font-medium text-slate-700 dark:text-slate-300 hover:text-purple-600 dark:hover:text-purple-400 transition">
                     Account
                   </Link>

@@ -41,12 +41,13 @@ export const useAuthStore = create<AuthStore>()(
               id: data.user.user_id,
               email: data.user.email,
               name: data.user.full_name,
-              role: email.includes('admin') ? 'admin' : 'user', // Mock role detection
+              role: data.user.role, // Use the role from API response
               createdAt: new Date(),
             };
             set({ user, isLoading: false });
           } else {
-            throw new Error('Login failed');
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Login failed');
           }
         } catch (error) {
           set({ isLoading: false });
@@ -85,6 +86,8 @@ export const useAuthStore = create<AuthStore>()(
 
       logout: () => {
         set({ user: null, isLoading: false });
+        // Clear any persisted data by forcing a fresh state
+        localStorage.removeItem('auth-store');
       },
 
       get isAdmin() {

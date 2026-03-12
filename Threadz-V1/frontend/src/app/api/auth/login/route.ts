@@ -5,12 +5,12 @@ export async function POST(request: NextRequest) {
     const { email, password } = await request.json();
 
     // Mock authentication logic
-    if (email === 'admin@example.com' && password === 'admin123') {
+    if (email === 'Threadz2026@gmail.com' && password === 'Threadz87651234') {
       return NextResponse.json({
         user: {
           user_id: 'admin-001',
-          email: 'admin@example.com',
-          full_name: 'Admin User',
+          email: 'Threadz2026@gmail.com',
+          full_name: 'Threadz Admin',
           role: 'admin'
         },
         access_token: 'mock-admin-token-' + Date.now()
